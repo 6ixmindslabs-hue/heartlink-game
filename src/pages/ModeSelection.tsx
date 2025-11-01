@@ -1,9 +1,12 @@
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { FloatingHearts } from "@/components/FloatingHearts";
 import { Heart, Flame, Smile } from "lucide-react";
 import galaxyBg from "@/assets/galaxy-bg.jpg";
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
+import { useState } from "react";
 
 const gameModes = [
   {
@@ -31,9 +34,37 @@ const gameModes = [
 
 export default function ModeSelection() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const roomId = searchParams.get("room");
+  const playerId = searchParams.get("player");
+  const [isStarting, setIsStarting] = useState(false);
 
-  const handleModeSelect = (modeId: string) => {
-    navigate(`/game?mode=${modeId}`);
+  const handleModeSelect = async (modeId: string) => {
+    if (!roomId || !playerId) {
+      navigate(`/game?mode=${modeId}`);
+      return;
+    }
+
+    setIsStarting(true);
+    try {
+      // Update room with mode and status
+      const { error } = await supabase
+        .from("game_rooms")
+        .update({
+          mode: modeId,
+          status: "playing",
+        })
+        .eq("id", roomId);
+
+      if (error) throw error;
+
+      // Navigate to game
+      navigate(`/game?room=${roomId}&player=${playerId}&mode=${modeId}`);
+    } catch (error) {
+      console.error("Error starting game:", error);
+      toast.error("Failed to start game. Please try again.");
+      setIsStarting(false);
+    }
   };
 
   return (
@@ -71,8 +102,12 @@ export default function ModeSelection() {
                   </div>
                   <h3 className="text-xl font-bold">{mode.title}</h3>
                   <p className="text-sm text-muted-foreground">{mode.description}</p>
-                  <Button variant="glass" className="w-full group-hover:border-primary/50">
-                    Select
+                  <Button 
+                    variant="glass" 
+                    className="w-full group-hover:border-primary/50"
+                    disabled={isStarting}
+                  >
+                    {isStarting ? "Starting..." : "Select"}
                   </Button>
                 </div>
               </Card>

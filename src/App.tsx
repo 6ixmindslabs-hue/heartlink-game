@@ -6,6 +6,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Index from "./pages/Index";
 import ProfileSetup from "./pages/ProfileSetup";
 import ModeSelection from "./pages/ModeSelection";
+import Lobby from "./pages/Lobby";
 import Game from "./pages/Game";
 import NotFound from "./pages/NotFound";
 
@@ -20,6 +21,7 @@ const App = () => (
         <Routes>
           <Route path="/" element={<Index />} />
           <Route path="/profile" element={<ProfileSetup />} />
+          <Route path="/lobby" element={<Lobby />} />
           <Route path="/mode-select" element={<ModeSelection />} />
           <Route path="/game" element={<Game />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}

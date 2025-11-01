@@ -1,10 +1,12 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { FloatingHearts } from "@/components/FloatingHearts";
 import galaxyBg from "@/assets/galaxy-bg.jpg";
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
 
 const avatarMoods = [
   { emoji: "😇", label: "Cute" },
@@ -16,12 +18,65 @@ const avatarMoods = [
 
 export default function ProfileSetup() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const roomId = searchParams.get("room");
+  
   const [nickname, setNickname] = useState("");
   const [selectedMood, setSelectedMood] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
 
-  const handleContinue = () => {
-    if (nickname && selectedMood) {
-      navigate("/mode-select");
+  const handleContinue = async () => {
+    if (nickname && selectedMood && roomId) {
+      setIsLoading(true);
+      try {
+        // Check if room exists
+        const { data: existingRoom } = await supabase
+          .from("game_rooms")
+          .select("*")
+          .eq("id", roomId)
+          .single();
+
+        const isHost = !existingRoom;
+
+        // Create room if host
+        if (isHost) {
+          const { error: roomError } = await supabase
+            .from("game_rooms")
+            .insert({
+              id: roomId,
+              host_id: roomId, // Using room ID as host identifier
+              status: "waiting",
+            });
+
+          if (roomError) throw roomError;
+        }
+
+        // Add player to room
+        const { data: player, error: playerError } = await supabase
+          .from("players")
+          .insert({
+            room_id: roomId,
+            nickname,
+            mood_emoji: selectedMood,
+            is_host: isHost,
+          })
+          .select()
+          .single();
+
+        if (playerError) throw playerError;
+
+        // Navigate based on role
+        if (isHost) {
+          navigate(`/lobby?room=${roomId}&player=${player.id}`);
+        } else {
+          navigate(`/lobby?room=${roomId}&player=${player.id}`);
+        }
+      } catch (error) {
+        console.error("Error setting up profile:", error);
+        toast.error("Failed to join room. Please try again.");
+      } finally {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -85,9 +140,9 @@ export default function ProfileSetup() {
             size="lg"
             className="w-full font-semibold text-lg"
             onClick={handleContinue}
-            disabled={!nickname || !selectedMood}
+            disabled={!nickname || !selectedMood || isLoading}
           >
-            Continue →
+            {isLoading ? "Joining..." : "Continue →"}
           </Button>
         </div>
       </Card>

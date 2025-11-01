@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
 import { FloatingHearts } from "@/components/FloatingHearts";
 import { GameWheel } from "@/components/GameWheel";
 import { QuestionCard } from "@/components/QuestionCard";
 import { HeartMeter } from "@/components/HeartMeter";
 import galaxyBg from "@/assets/galaxy-bg.jpg";
+import { supabase } from "@/integrations/supabase/client";
 
 // Sample questions database
 const questions = {
@@ -61,22 +62,76 @@ const questions = {
 export default function Game() {
   const [searchParams] = useSearchParams();
   const mode = (searchParams.get("mode") || "friendly") as keyof typeof questions;
+  const roomId = searchParams.get("room");
+  const playerId = searchParams.get("player");
   
   const [currentRound, setCurrentRound] = useState(1);
   const [isSpinning, setIsSpinning] = useState(false);
   const [currentQuestion, setCurrentQuestion] = useState<{type: "truth" | "dare", text: string} | null>(null);
 
-  const handleSpinResult = (result: "truth" | "dare") => {
+  // Sync game state with database if multiplayer
+  useEffect(() => {
+    if (!roomId) return;
+
+    // Subscribe to room updates
+    const channel = supabase
+      .channel(`game-${roomId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "game_rooms",
+          filter: `id=eq.${roomId}`,
+        },
+        (payload) => {
+          const newRound = payload.new.current_round as number;
+          const newQuestion = payload.new.current_question as {type: "truth" | "dare", text: string} | null;
+          
+          setCurrentRound(newRound);
+          setCurrentQuestion(newQuestion);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [roomId]);
+
+  const handleSpinResult = async (result: "truth" | "dare") => {
     setIsSpinning(false);
     const questionList = result === "truth" ? questions[mode].truths : questions[mode].dares;
     const randomQuestion = questionList[Math.floor(Math.random() * questionList.length)];
-    setCurrentQuestion({ type: result, text: randomQuestion });
+    const newQuestion = { type: result, text: randomQuestion };
+    
+    setCurrentQuestion(newQuestion);
+
+    // Sync to database if multiplayer
+    if (roomId) {
+      await supabase
+        .from("game_rooms")
+        .update({ current_question: newQuestion })
+        .eq("id", roomId);
+    }
   };
 
-  const handleNext = () => {
+  const handleNext = async () => {
     if (currentRound < 10) {
-      setCurrentRound(prev => prev + 1);
+      const newRound = currentRound + 1;
+      setCurrentRound(newRound);
       setCurrentQuestion(null);
+
+      // Sync to database if multiplayer
+      if (roomId) {
+        await supabase
+          .from("game_rooms")
+          .update({ 
+            current_round: newRound,
+            current_question: null 
+          })
+          .eq("id", roomId);
+      }
     } else {
       // Game complete - could navigate to summary
       alert("🎉 You've completed all 10 rounds! Your HeartLink is strong! 💖");
