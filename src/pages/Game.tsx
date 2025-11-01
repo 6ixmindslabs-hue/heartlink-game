@@ -4,8 +4,12 @@ import { FloatingHearts } from "@/components/FloatingHearts";
 import { GameWheel } from "@/components/GameWheel";
 import { QuestionCard } from "@/components/QuestionCard";
 import { HeartMeter } from "@/components/HeartMeter";
+import { GameHistory } from "@/components/GameHistory";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import galaxyBg from "@/assets/galaxy-bg.jpg";
 import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
 
 // Sample questions database
 const questions = {
@@ -68,6 +72,56 @@ export default function Game() {
   const [currentRound, setCurrentRound] = useState(1);
   const [isSpinning, setIsSpinning] = useState(false);
   const [currentQuestion, setCurrentQuestion] = useState<{type: "truth" | "dare", text: string} | null>(null);
+  const [currentPlayerId, setCurrentPlayerId] = useState<string | null>(null);
+  const [players, setPlayers] = useState<any[]>([]);
+  const [history, setHistory] = useState<any[]>([]);
+  const [answer, setAnswer] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const isMyTurn = currentPlayerId === playerId;
+  const currentPlayerName = players.find(p => p.id === currentPlayerId)?.nickname || "Unknown";
+
+  // Load initial game state
+  useEffect(() => {
+    if (!roomId) return;
+
+    const loadGameState = async () => {
+      // Load room data
+      const { data: room } = await supabase
+        .from("game_rooms")
+        .select("*")
+        .eq("id", roomId)
+        .single();
+
+      if (room) {
+        setCurrentRound(room.current_round);
+        setCurrentQuestion(room.current_question as {type: "truth" | "dare", text: string} | null);
+        setCurrentPlayerId(room.current_player_id);
+        setHistory((room.question_history as any[]) || []);
+      }
+
+      // Load players
+      const { data: playersData } = await supabase
+        .from("players")
+        .select("*")
+        .eq("room_id", roomId)
+        .order("joined_at");
+
+      if (playersData) {
+        setPlayers(playersData);
+        
+        // Set first player as current if not set
+        if (!room?.current_player_id && playersData.length > 0) {
+          await supabase
+            .from("game_rooms")
+            .update({ current_player_id: playersData[0].id })
+            .eq("id", roomId);
+        }
+      }
+    };
+
+    loadGameState();
+  }, [roomId]);
 
   // Sync game state with database if multiplayer
   useEffect(() => {
@@ -87,9 +141,14 @@ export default function Game() {
         (payload) => {
           const newRound = payload.new.current_round as number;
           const newQuestion = payload.new.current_question as {type: "truth" | "dare", text: string} | null;
+          const newCurrentPlayerId = payload.new.current_player_id as string;
+          const newHistory = (payload.new.question_history as any[]) || [];
           
           setCurrentRound(newRound);
           setCurrentQuestion(newQuestion);
+          setCurrentPlayerId(newCurrentPlayerId);
+          setHistory(newHistory);
+          setAnswer("");
         }
       )
       .subscribe();
@@ -100,6 +159,8 @@ export default function Game() {
   }, [roomId]);
 
   const handleSpinResult = async (result: "truth" | "dare") => {
+    if (!isMyTurn) return;
+    
     setIsSpinning(false);
     const questionList = result === "truth" ? questions[mode].truths : questions[mode].dares;
     const randomQuestion = questionList[Math.floor(Math.random() * questionList.length)];
@@ -111,16 +172,86 @@ export default function Game() {
     if (roomId) {
       await supabase
         .from("game_rooms")
-        .update({ current_question: newQuestion })
+        .update({ 
+          current_question: newQuestion,
+          current_answer: null
+        })
         .eq("id", roomId);
     }
   };
 
+  const handleSubmitAnswer = async () => {
+    if (!isMyTurn || !answer.trim() || !currentQuestion) return;
+    
+    setIsSubmitting(true);
+    try {
+      // Add to history
+      const newHistoryEntry = {
+        round: currentRound,
+        type: currentQuestion.type,
+        question: currentQuestion.text,
+        answer: answer.trim(),
+        playerName: currentPlayerName,
+      };
+
+      const updatedHistory = [...history, newHistoryEntry];
+
+      if (roomId) {
+        await supabase
+          .from("game_rooms")
+          .update({ 
+            question_history: updatedHistory,
+            current_answer: answer.trim()
+          })
+          .eq("id", roomId);
+      }
+
+      setHistory(updatedHistory);
+      toast.success("Answer submitted!");
+      
+      // Auto-advance after answer
+      setTimeout(() => handleNext(), 1000);
+    } catch (error) {
+      console.error("Error submitting answer:", error);
+      toast.error("Failed to submit answer");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const handleNext = async () => {
+    if (!isMyTurn && roomId) {
+      toast.error("Not your turn!");
+      return;
+    }
+
+    // Add to history if dare (no answer needed)
+    if (currentQuestion?.type === "dare" && roomId) {
+      const newHistoryEntry = {
+        round: currentRound,
+        type: currentQuestion.type,
+        question: currentQuestion.text,
+        playerName: currentPlayerName,
+      };
+      const updatedHistory = [...history, newHistoryEntry];
+      
+      await supabase
+        .from("game_rooms")
+        .update({ question_history: updatedHistory })
+        .eq("id", roomId);
+    }
+
     if (currentRound < 10) {
       const newRound = currentRound + 1;
+      
+      // Switch to next player
+      const currentPlayerIndex = players.findIndex(p => p.id === currentPlayerId);
+      const nextPlayerIndex = (currentPlayerIndex + 1) % players.length;
+      const nextPlayerId = players[nextPlayerIndex]?.id;
+
       setCurrentRound(newRound);
       setCurrentQuestion(null);
+      setAnswer("");
 
       // Sync to database if multiplayer
       if (roomId) {
@@ -128,18 +259,22 @@ export default function Game() {
           .from("game_rooms")
           .update({ 
             current_round: newRound,
-            current_question: null 
+            current_question: null,
+            current_player_id: nextPlayerId,
+            current_answer: null
           })
           .eq("id", roomId);
       }
     } else {
-      // Game complete - could navigate to summary
-      alert("🎉 You've completed all 10 rounds! Your HeartLink is strong! 💖");
+      // Game complete
+      toast.success("🎉 You've completed all 10 rounds! Your HeartLink is strong! 💖");
     }
   };
 
   const handleDone = () => {
-    handleNext();
+    if (currentQuestion?.type === "dare") {
+      handleNext();
+    }
   };
 
   const progress = (currentRound / 10) * 100;
@@ -158,7 +293,7 @@ export default function Game() {
       
       <div className="relative z-10 max-w-4xl mx-auto w-full flex-1 flex flex-col">
         {/* Header */}
-        <div className="mb-8 space-y-4">
+        <div className="mb-6 space-y-4">
           <div className="flex justify-between items-center">
             <h2 className="text-2xl font-bold bg-gradient-romantic bg-clip-text text-transparent">
               Round {currentRound}/10
@@ -167,26 +302,97 @@ export default function Game() {
               <span className="text-sm font-medium capitalize">{mode} Mode</span>
             </div>
           </div>
+          
+          {roomId && (
+            <div className="text-center">
+              <p className="text-sm text-muted-foreground">
+                Current Turn: <span className="font-bold text-romantic">{currentPlayerName}</span>
+                {isMyTurn && <span className="ml-2 text-accent">(Your turn!)</span>}
+              </p>
+            </div>
+          )}
+          
           <HeartMeter progress={progress} />
         </div>
+
+        {/* History Panel */}
+        {roomId && (
+          <div className="mb-6">
+            <GameHistory history={history} />
+          </div>
+        )}
 
         {/* Game Content */}
         <div className="flex-1 flex items-center justify-center">
           {!currentQuestion ? (
-            <GameWheel 
-              onResult={(result) => {
-                setIsSpinning(true);
-                handleSpinResult(result);
-              }}
-              isSpinning={isSpinning}
-            />
+            <div className="text-center">
+              {isMyTurn ? (
+                <GameWheel 
+                  onResult={(result) => {
+                    setIsSpinning(true);
+                    handleSpinResult(result);
+                  }}
+                  isSpinning={isSpinning}
+                />
+              ) : (
+                <div className="p-8 bg-card/40 backdrop-blur-md rounded-lg border-2 border-primary/30">
+                  <p className="text-lg text-muted-foreground">
+                    Waiting for {currentPlayerName} to spin...
+                  </p>
+                </div>
+              )}
+            </div>
           ) : (
-            <QuestionCard
-              type={currentQuestion.type}
-              question={currentQuestion.text}
-              onNext={handleNext}
-              onDone={handleDone}
-            />
+            <div className="w-full max-w-2xl">
+              {currentQuestion.type === "truth" ? (
+                <div className="p-8 bg-card/40 backdrop-blur-md border-2 border-primary/30 shadow-soft rounded-lg animate-fade-in">
+                  <div className="mb-6">
+                    <h3 className="text-2xl font-bold capitalize bg-gradient-romantic bg-clip-text text-transparent mb-4">
+                      Truth Question
+                    </h3>
+                    <p className="text-lg leading-relaxed mb-6">
+                      {currentQuestion.text}
+                    </p>
+                  </div>
+
+                  {isMyTurn ? (
+                    <div className="space-y-4">
+                      <Input
+                        placeholder="Type your answer here..."
+                        value={answer}
+                        onChange={(e) => setAnswer(e.target.value)}
+                        className="bg-input/50 border-primary/30 text-lg"
+                        disabled={isSubmitting}
+                      />
+                      <div className="flex gap-4">
+                        <Button
+                          variant="romantic"
+                          size="lg"
+                          onClick={handleSubmitAnswer}
+                          disabled={!answer.trim() || isSubmitting}
+                          className="flex-1"
+                        >
+                          {isSubmitting ? "Submitting..." : "Submit Answer"}
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-center py-4">
+                      <p className="text-muted-foreground">
+                        Waiting for {currentPlayerName} to answer...
+                      </p>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <QuestionCard
+                  type={currentQuestion.type}
+                  question={currentQuestion.text}
+                  onNext={handleNext}
+                  onDone={handleDone}
+                />
+              )}
+            </div>
           )}
         </div>
       </div>

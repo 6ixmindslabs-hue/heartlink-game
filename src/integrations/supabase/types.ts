@@ -17,35 +17,52 @@ export type Database = {
       game_rooms: {
         Row: {
           created_at: string
+          current_answer: string | null
+          current_player_id: string | null
           current_question: Json | null
           current_round: number | null
           host_id: string
           id: string
           mode: string | null
+          question_history: Json | null
           status: string
           updated_at: string
         }
         Insert: {
           created_at?: string
+          current_answer?: string | null
+          current_player_id?: string | null
           current_question?: Json | null
           current_round?: number | null
           host_id: string
           id: string
           mode?: string | null
+          question_history?: Json | null
           status?: string
           updated_at?: string
         }
         Update: {
           created_at?: string
+          current_answer?: string | null
+          current_player_id?: string | null
           current_question?: Json | null
           current_round?: number | null
           host_id?: string
           id?: string
           mode?: string | null
+          question_history?: Json | null
           status?: string
           updated_at?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "game_rooms_current_player_id_fkey"
+            columns: ["current_player_id"]
+            isOneToOne: false
+            referencedRelation: "players"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       players: {
         Row: {
